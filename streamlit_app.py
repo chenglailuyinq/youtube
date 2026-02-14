@@ -3,87 +3,115 @@ import yt_dlp
 import os
 import tempfile
 
-st.set_page_config(page_title="YouTube Downloader", page_icon="🎥")
+def get_video_info(url):
+    ydl_opts = {'quiet': True, 'no_warnings': True}
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        return ydl.extract_info(url, download=False)
 
-st.title("🎥 YouTube 高画質ダウンローダー")
-st.write("URLを入力して、お好みの画質・形式でダウンロードできます。")
+def main():
+    st.set_page_config(page_title="Ultimate YT Downloader", page_icon="🎥")
+    st.title("🎥 YouTube 高画質ダウンローダー")
+    st.write("URLを入力して、画質・音質を選択してください。最高画質は自動で結合されます。")
 
-# URL入力
-url = st.text_input("YouTube URLを入力してください:", placeholder="https://www.youtube.com/watch?v=...")
+    url = st.text_input("YouTube動画のURLを入力:", placeholder="https://www.youtube.com/watch?v=...")
 
-if url:
-    with st.spinner("動画情報を取得中..."):
-        ydl_opts = {'quiet': True, 'no_warnings': True}
+    if url:
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+            with st.spinner("情報を取得中..."):
+                info = get_video_info(url)
                 formats = info.get('formats', [])
                 title = info.get('title', 'video')
                 
-                st.subheader(f"作品名: {title}")
-                
-                # 選択肢の作成
-                options = []
-                # 1. 音声のみ
-                options.append({"label": "音声のみ (mp3/m4a)", "format_id": "bestaudio/best", "ext": "mp3"})
-                
-                # 2. 映像+音声 (結合済み or 高画質結合)
-                # 一般的な画質をリストアップ
-                res_list = ["2160", "1440", "1080", "720", "480", "360"]
-                seen_res = set()
-                
-                for f in formats:
-                    res = f.get('height')
-                    if res and str(res) in res_list and res not in seen_res:
-                        options.append({
-                            "label": f"動画: {res}p (最高画質結合)",
-                            "format_id": f"bestvideo[height<={res}]+bestaudio/best",
-                            "ext": "mp4"
-                        })
-                        seen_res.add(res)
+            st.subheader(f"🎵 {title}")
 
-                # ユーザー選択 UI
-                choice = st.selectbox("ダウンロード形式を選択:", options, format_func=lambda x: x['label'])
-                
-                if st.button("ダウンロード準備開始"):
-                    with st.spinner("サーバーで処理中... (高画質の場合は結合に時間がかかります)"):
-                        # 一時ディレクトリで作業
-                        with tempfile.TemporaryDirectory() as tmpdirname:
-                            output_template = os.path.join(tmpdirname, f"{title}.%(ext)s")
+            # 選択肢の整理
+            video_options = []
+            audio_options = []
+            
+            for f in formats:
+                ext = f.get('ext')
+                resolution = f.get('resolution')
+                vcodec = f.get('vcodec')
+                acodec = f.get('acodec')
+                fid = f.get('format_id')
+
+                # 映像のみ (googlevideo.com 直リンク含む)
+                if vcodec != 'none' and acodec == 'none':
+                    video_options.append({
+                        "label": f"🎥 映像: {resolution} ({ext}) - ID:{fid}",
+                        "id": fid,
+                        "ext": ext
+                    })
+                # 音声のみ
+                elif vcodec == 'none' and acodec != 'none':
+                    audio_options.append({
+                        "label": f"🔊 音声: {f.get('abr')}kbps ({ext}) - ID:{fid}",
+                        "id": fid,
+                        "ext": ext
+                    })
+
+            # ユーザー選択 UI
+            mode = st.radio("ダウンロードモードを選択:", ["映像+音声 (最高画質結合)", "映像のみ (単品)", "音声のみ (単品)"])
+
+            selected_video = None
+            selected_audio = None
+
+            if mode == "映像+音声 (最高画質結合)":
+                v_labels = [opt["label"] for opt in video_options]
+                a_labels = [opt["label"] for opt in audio_options]
+                v_choice = st.selectbox("映像画質を選択:", v_labels)
+                a_choice = st.selectbox("音声品質を選択:", a_labels)
+                selected_video = next(opt for opt in video_options if opt["label"] == v_choice)
+                selected_audio = next(opt for opt in audio_options if opt["label"] == a_choice)
+                format_str = f"{selected_video['id']}+{selected_audio['id']}"
+                out_ext = "mp4" # 結合時はmp4が一般的
+
+            elif mode == "映像のみ (単品)":
+                v_labels = [opt["label"] for opt in video_options]
+                v_choice = st.selectbox("映像を選択:", v_labels)
+                selected_video = next(opt for opt in video_options if opt["label"] == v_choice)
+                format_str = selected_video['id']
+                out_ext = selected_video['ext']
+
+            else: # 音声のみ
+                a_labels = [opt["label"] for opt in audio_options]
+                a_choice = st.selectbox("音声を選択:", a_labels)
+                selected_audio = next(opt for opt in audio_options if opt["label"] == a_choice)
+                format_str = selected_audio['id']
+                out_ext = selected_audio['ext']
+
+            if st.button("ダウンロード準備開始"):
+                with st.spinner("サーバーで処理中... (高画質結合には時間がかかります)"):
+                    # 一時ファイル用ディレクトリ
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        output_path = os.path.join(tmpdir, f"output.{out_ext}")
+                        
+                        ydl_download_opts = {
+                            'format': format_str,
+                            'outtmpl': output_path,
+                            'merge_output_format': 'mp4' if mode == "映像+音声 (最高画質結合)" else None,
+                            'quiet': True,
+                        }
+
+                        with yt_dl_YoutubeDL(ydl_download_opts) as ydl:
+                            # 処理実行
+                            ydl.download([url])
                             
-                            dl_opts = {
-                                'format': choice['format_id'],
-                                'outtmpl': output_template,
-                                'merge_output_format': 'mp4' if choice['ext'] == 'mp4' else None,
-                                'postprocessors': [{
-                                    'key': 'FFmpegExtractAudio',
-                                    'preferredcodec': 'mp3',
-                                    'preferredquality': '192',
-                                } if choice['ext'] == 'mp3' else {
-                                    'key': 'FFmpegVideoConvertor',
-                                    'preferedformat': 'mp4',
-                                }],
-                                'quiet': False,
-                            }
-                            
-                            with yt_dlp.YoutubeDL(dl_opts) as ydl_dl:
-                                ydl_dl.download([url])
-                            
-                            # ダウンロードされたファイルを探す
-                            files = os.listdir(tmpdirname)
-                            if files:
-                                target_file = os.path.join(tmpdirname, files[0])
-                                with open(target_file, "rb") as f:
-                                    st.download_button(
-                                        label="📥 PC/スマホへ保存",
-                                        data=f,
-                                        file_name=files[0],
-                                        mime="video/mp4" if choice['ext'] == 'mp4' else "audio/mpeg"
-                                    )
-                                st.success("準備が完了しました！上のボタンを押して保存してください。")
-                                
+                        # 完成したファイルをバイナリで読み込み
+                        with open(output_path, "rb") as f:
+                            btn = st.download_button(
+                                label="PC/スマホに保存する",
+                                data=f,
+                                file_name=f"{title}.{out_ext}",
+                                mime=f"video/{out_ext}" if "映像" in mode else f"audio/{out_ext}"
+                            )
+                            st.success("準備完了！上のボタンを押して保存してください。")
+
         except Exception as e:
             st.error(f"エラーが発生しました: {e}")
 
-st.markdown("---")
-st.caption("利用規約を遵守し、個人利用の範囲でご使用ください。")
+# yt_dlpのクラス呼び出しを修正
+from yt_dlp import YoutubeDL as yt_dl_YoutubeDL
+
+if __name__ == "__main__":
+    main()
